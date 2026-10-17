@@ -2098,14 +2098,16 @@ def _make_prefix_callback(command_name: str):
             logger.exception("Prefix command failed: %s", command_name)
             await _prefix_send(ctx, "Lệnh gặp lỗi; chi tiết đã được ghi vào log Railway.")
         finally:
-            # Xóa tin nhắn gốc gọi lệnh prefix sau khi bot xử lý xong.
+            # Chỉ xóa tin nhắn gốc đối với nhóm Mã hóa (encoding).
+            # Các nhóm lệnh khác giữ nguyên tin nhắn của người dùng.
             # Bot cần quyền Manage Messages trong kênh; nếu thiếu quyền thì bỏ qua.
-            try:
-                await ctx.message.delete()
-            except (discord.Forbidden, discord.NotFound):
-                pass
-            except discord.HTTPException as exc:
-                logger.debug("Không thể xóa tin nhắn lệnh prefix %s: %s", command_name, exc)
+            if group == "encoding":
+                try:
+                    await ctx.message.delete()
+                except (discord.Forbidden, discord.NotFound):
+                    pass
+                except discord.HTTPException as exc:
+                    logger.debug("Không thể xóa tin nhắn lệnh mã hóa %s: %s", command_name, exc)
     _callback.__name__ = f"prefix_{command_name}"
     _callback.__doc__ = PREFIX_COMMAND_DESCRIPTIONS.get(command_name, command_name)
     return _callback
