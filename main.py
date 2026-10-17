@@ -1725,7 +1725,10 @@ async def run_prefix_action(ctx: commands.Context, name: str, raw: str = ""):
     if lower == "timezone_convert": return await _prefix_send(ctx,"Dùng thư viện zoneinfo với múi giờ IANA; định dạng đề xuất: !timezone_convert YYYY-MM-DDTHH:MM|Asia/Ho_Chi_Minh|UTC")
 
     # ---------- encoders and data tools ----------
-    if lower == "base64_encode": return await _prefix_send(ctx,base64.b64encode(args.encode()).decode())
+    if lower == "base64_encode":
+        if not args.strip():
+            return await _prefix_send(ctx, f"❌ Cách dùng: `{BOT_PREFIX}base64_encode nội dung cần mã hóa`\nVí dụ: `{BOT_PREFIX}base64_encode xin chào`")
+        return await _prefix_send(ctx, base64.b64encode(args.encode("utf-8")).decode("utf-8"))
     if lower == "base64_decode":
         try:return await _prefix_send(ctx,base64.b64decode(args,validate=True).decode())
         except Exception:return await _prefix_send(ctx,"Chuỗi Base64 không hợp lệ hoặc không phải UTF-8.")
@@ -2164,9 +2167,15 @@ def prefix_help_embed(category=None, page=0):
         description=f"Trang **{page + 1}/{pages}** · **{len(names)}** lệnh trong mục",
         color=discord.Color.blurple(),
     )
-    for name in selected:
-        embed.add_field(name=f"{BOT_PREFIX}{name}", value=PREFIX_COMMAND_DESCRIPTIONS.get(name, "Lệnh tiện ích."), inline=False)
-    embed.set_footer(text="Chọn danh mục để chuyển mục · dùng nút trang để xem thêm")
+    # Hiện từng lệnh trong khối code để người dùng trên điện thoại có thể nhấn giữ
+    # và sao chép nhanh; Discord bot không được phép tự ghi vào clipboard người dùng.
+    command_lines = [f"{BOT_PREFIX}{name}" for name in selected]
+    embed.description = (
+        f"Trang **{page + 1}/{pages}** · **{len(names)}** lệnh trong mục\n\n"
+        + "\n".join(f"`{command}` — {PREFIX_COMMAND_DESCRIPTIONS.get(name, 'Lệnh tiện ích.')}"
+                       for command, name in zip(command_lines, selected))
+    )
+    embed.set_footer(text="Nhấn giữ dòng lệnh để sao chép · chọn danh mục/nút để xem thêm")
     return embed
 
 
