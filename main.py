@@ -1,9 +1,9 @@
 """
-DISCORD COMMUNITY BOT — SINGLE FILE EDITION
+DISCORD COMMUNITY BOT — MODULAR EDITION
 ===========================================
 
 Deployment target: Railway
-Command styles: Discord slash commands + 500 prefix commands (default !)
+Command styles: Discord slash commands + prefix command groups split into 20 files (default !)
 Permission model:
   - Public commands: available to all members unless a command says otherwise.
   - Admin commands: require Discord Administrator permission (and are checked again in code).
@@ -1375,28 +1375,7 @@ import urllib.parse
 import uuid as _uuid
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 
-PREFIX_COMMAND_GROUPS = {
-    "chat": "alo echo upper lower titlecase reverse length wordcount linecount remove_space remove_line sort_words unique_words repeat mockcase alternate_case count_chars count_letters count_digits count_symbols replace prefix_text suffix_text split_text join_text".split(),
-    "member": "userinfo avatar banner userid username displayname nickname account_age joined_at created_at member_roles member_toprole member_status member_activity member_voice member_permissions member_color member_mentions member_dm member_note member_notes member_note_delete member_compare member_invites member_messages".split(),
-    "server": "serverinfo servericon serverbanner serverid serverowner membercount botcount humancount rolecount channelcount textchannels voicechannels categories server_created server_boosts server_features server_region server_emojis server_stickers server_roles server_rules server_stats server_activity server_invites server_snapshot".split(),
-    "moderation": "kick ban unban softban timeout untimeout warn warnings clearwarnings warn_remove purge purge_user purge_bots purge_links purge_images purge_files purge_mentions purge_contains nickname_set nickname_reset role_add role_remove role_list member_quarantine member_release".split(),
-    "channel": "lock unlock slowmode slowmode_off channel_create channel_delete channel_rename channel_topic channel_topic_clear channel_clone channel_move category_create category_delete category_rename channel_nsfw channel_safe channel_position channel_sync channel_unsync channel_permissions channel_allow channel_deny channel_reset channel_pin channel_unpin".split(),
-    "role": "role_create role_delete role_rename role_color role_hoist role_unhoist role_mentionable role_unmentionable role_position role_info role_members role_count role_permissions role_copy role_assign_all role_remove_all role_assign_bots role_assign_humans role_assign_new role_self_add role_self_remove role_reaction_setup role_reaction_remove role_backup role_restore".split(),
-    "logs": "modlog_set modlog_show modlog_test message_log_set message_log_toggle voice_log_set voice_log_toggle member_log_set member_log_toggle role_log_set role_log_toggle channel_log_set channel_log_toggle audit_recent mod_case mod_case_note mod_case_reason mod_case_delete mod_history mod_stats mod_top mod_note mod_notes mod_note_clear mod_report".split(),
-    "security": "antispam_on antispam_off antispam_limit antispam_window antispam_action antiinvite_on antiinvite_off antilink_on antilink_off antilink_allow antilink_deny badword_add badword_remove badword_list badword_toggle caps_limit mention_limit duplicate_limit emoji_limit new_account_limit raid_mode_on raid_mode_off raid_threshold raid_status security_report".split(),
-    "welcome": "welcome_set welcome_message welcome_preview welcome_test welcome_on welcome_off welcome_image_on welcome_image_off welcome_color welcome_footer goodbye_set goodbye_message goodbye_test goodbye_on goodbye_off autorole_set autorole_on autorole_off welcome_dm_set welcome_dm_on welcome_dm_off member_screening_info new_member_list member_join_stats member_leave_stats".split(),
-    "level": "rank leaderboard xp level level_set xp_add xp_remove xp_reset xp_multiplier xp_cooldown xp_channel_set xp_channel_off xp_ignore_channel xp_allow_channel xp_ignore_role xp_allow_role level_reward_add level_reward_remove level_rewards level_card xp_transfer xp_daily xp_weekly xp_stats level_history".split(),
-    "games": "coinflip dice roll rps guess_number guess_word trivia trivia_category math_quiz word_scramble hangman memory_game reaction_test click_challenge daily_challenge would_you_rather truth_or_dare never_have_i_ever random_question riddle riddle_answer emoji_quiz guess_song guess_flag game_stats".split(),
-    "social": "hug pat wave slap highfive handshake cheer thank compliment encourage apologize goodnight goodmorning birthday_wish ship friendship compatibility roast fortune mood vibecheck rate pickupline conversation_starter icebreaker".split(),
-    "math": "add subtract multiply divide power sqrt cuberoot factorial gcd lcm is_prime prime_factors percentage percent_change average median mode range variance stddev quadratic linear factorial_table random_number random_decimal".split(),
-    "conversion": "celsius_to_fahrenheit fahrenheit_to_celsius celsius_to_kelvin km_to_miles miles_to_km meters_to_feet feet_to_meters cm_to_inches inches_to_cm kg_to_pounds pounds_to_kg grams_to_ounces ounces_to_grams liters_to_gallons gallons_to_liters ml_to_cups cups_to_ml kmh_to_mph mph_to_kmh bytes_to_kb kb_to_mb mb_to_gb seconds_to_minutes minutes_to_hours hours_to_days".split(),
-    "time": "time date timestamp unix_time countdown days_between weekday week_number leap_year days_in_month add_days subtract_days timezone timezone_convert remindme reminders reminder_cancel reminder_edit reminder_snooze reminder_repeat birthday_set birthday_show birthday_remove birthday_list birthday_notifications".split(),
-    "encoding": "base64_encode base64_decode url_encode url_decode html_escape html_unescape json_format json_minify json_validate uuid hash_sha256 hash_sha512 hash_md5 password_generate password_strength random_hex random_string random_uuid binary_encode binary_decode hex_encode hex_decode morse_encode morse_decode qr_text".split(),
-    "utility": "choose shuffle sample lottery lottery_weighted poll poll_close poll_results survey_create survey_results quote quote_random fact_random joke dadjoke pun compliment_random motivation daily_quote daily_fact dictionary synonyms antonyms text_translate text_detect_language".split(),
-    "ticket": "ticket_setup ticket_panel ticket_create ticket_close ticket_reopen ticket_add ticket_remove ticket_claim ticket_unclaim ticket_assign ticket_priority ticket_topic ticket_transcript ticket_delete ticket_list ticket_mine ticket_search ticket_stats ticket_rating ticket_feedback ticket_archive ticket_unarchive ticket_export ticket_set_support ticket_set_log".split(),
-    "system": "helpall help ping botinfo botavatar botuptime botlatency botstats botguilds botusers botcommands botmemory bot_cpu bot_latency_history bot_errors bot_error_detail bot_config_show bot_config_export bot_db_stats bot_db_backup bot_db_integrity bot_cache_stats bot_cache_clear bot_sync_commands bot_shutdown".split(),
-    "advanced": "prefix_show prefix_set prefix_reset language_show language_set timezone_set timezone_show embed_create embed_color embed_thumbnail embed_image embed_footer embed_author embed_send embed_preview starboard_set starboard_threshold starboard_show suggest suggestion_status suggestion_list suggestion_vote suggestion_close feedback report_bug".split(),
-}
+from commands import PREFIX_COMMAND_GROUPS
 
 PREFIX_COMMAND_DESCRIPTIONS = {}
 for _group_name, _command_names in PREFIX_COMMAND_GROUPS.items():
@@ -2118,6 +2097,15 @@ def _make_prefix_callback(command_name: str):
         except Exception:
             logger.exception("Prefix command failed: %s", command_name)
             await _prefix_send(ctx, "Lệnh gặp lỗi; chi tiết đã được ghi vào log Railway.")
+        finally:
+            # Xóa tin nhắn gốc gọi lệnh prefix sau khi bot xử lý xong.
+            # Bot cần quyền Manage Messages trong kênh; nếu thiếu quyền thì bỏ qua.
+            try:
+                await ctx.message.delete()
+            except (discord.Forbidden, discord.NotFound):
+                pass
+            except discord.HTTPException as exc:
+                logger.debug("Không thể xóa tin nhắn lệnh prefix %s: %s", command_name, exc)
     _callback.__name__ = f"prefix_{command_name}"
     _callback.__doc__ = PREFIX_COMMAND_DESCRIPTIONS.get(command_name, command_name)
     return _callback
