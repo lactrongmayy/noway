@@ -19,14 +19,31 @@ import emoji
 
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 
+# Chỉ User ID này được sử dụng các slash command
 OWNER_ID = 1356498767788118099
 
 DB_FILE = "voice_lock.sqlite3"
 
-# Cấu hình TTS
-TTS_VOICE = os.getenv("TTS_VOICE", "vi-VN-HoaiMyNeural")
-TTS_RATE = os.getenv("TTS_RATE", "-10%")
+# Cấu hình Edge TTS
+TTS_VOICE = os.getenv(
+    "TTS_VOICE",
+    "vi-VN-HoaiMyNeural",
+)
+
+TTS_RATE = os.getenv(
+    "TTS_RATE",
+    "-10%",
+)
+
+TTS_PITCH = os.getenv(
+    "TTS_PITCH",
+    "+10Hz",
+)
+
 MAX_TEXT_LENGTH = 1500
+MAX_QUEUE_SIZE = 30
+VOICE_MONITOR_INTERVAL = 10
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,7 +73,11 @@ db.commit()
 def save_lock(guild_id: int, channel_id: int):
     db.execute(
         """
-        INSERT INTO voice_lock (guild_id, channel_id, enabled)
+        INSERT INTO voice_lock (
+            guild_id,
+            channel_id,
+            enabled
+        )
         VALUES (?, ?, 1)
         ON CONFLICT(guild_id)
         DO UPDATE SET
@@ -96,6 +117,7 @@ def get_locks():
 # ==================================================
 
 intents = discord.Intents.default()
+
 intents.guilds = True
 intents.members = True
 intents.voice_states = True
@@ -121,12 +143,14 @@ def is_speech_enabled(guild_id: int) -> bool:
 def get_queue(guild_id: int):
     if guild_id not in speech_queues:
         speech_queues[guild_id] = asyncio.Queue()
+
     return speech_queues[guild_id]
 
 
 def get_lock(guild_id: int):
     if guild_id not in speech_locks:
         speech_locks[guild_id] = asyncio.Lock()
+
     return speech_locks[guild_id]
 
 
@@ -144,12 +168,10 @@ class VoiceLockBot(commands.Bot):
 
         self.voice_targets = get_locks()
         self.cleaned_guild_commands = False
-        self.reconnect_tasks = {}
 
     async def setup_hook(self):
-        # Đồng bộ danh sách lệnh toàn cục.
-        # Danh sách này chỉ gồm các lệnh được khai báo
-        # trong file hiện tại.
+
+        # Đồng bộ slash command toàn cục
         try:
             synced = await self.tree.sync()
 
@@ -163,25 +185,33 @@ class VoiceLockBot(commands.Bot):
                 "Không thể đồng bộ lệnh toàn cục."
             )
 
-        # Chạy kiểm tra kết nối định kỳ.
-        self.voice_monitor.start()
+        if not self.voice_monitor.is_running():
+            self.voice_monitor.start()
 
     async def on_ready(self):
+
         logger.info(
             "Bot online: %s | ID: %s",
             self.user,
             self.user.id if self.user else "unknown",
         )
 
-        # Xóa các lệnh đăng ký riêng theo server.
-        # Không xóa các lệnh toàn cục.
+        # Dọn lệnh đăng ký riêng theo server
+        # Các lệnh toàn cục không bị xóa
         if not self.cleaned_guild_commands:
+
             self.cleaned_guild_commands = True
 
             for guild in self.guilds:
+
                 try:
-                    self.tree.clear_commands(guild=guild)
-                    await self.tree.sync(guild=guild)
+                    self.tree.clear_commands(
+                        guild=guild,
+                    )
+
+                    await self.tree.sync(
+                        guild=guild,
+                    )
 
                     logger.info(
                         "Đã dọn lệnh riêng tại server %s (%s).",
@@ -196,10 +226,6 @@ class VoiceLockBot(commands.Bot):
                     )
 
     async def try_reconnect(self, guild_id: int):
-        """
-        Thử đưa bot về phòng đã khóa.
-        Không cố vượt qua quyền hạn Discord.
-        """
 
         channel_id = self.voice_targets.get(guild_id)
 
@@ -215,7 +241,10 @@ class VoiceLockBot(commands.Bot):
 
         if not isinstance(
             channel,
-            (discord.VoiceChannel, discord.StageChannel),
+            (
+                discord.VoiceChannel,
+                discord.StageChannel,
+            ),
         ):
             logger.warning(
                 "Không tìm thấy phòng đã khóa: %s",
@@ -230,7 +259,10 @@ class VoiceLockBot(commands.Bot):
 
         permissions = channel.permissions_for(member)
 
-        if not permissions.view_channel or not permissions.connect:
+        if (
+            not permissions.view_channel
+            or not permissions.connect
+        ):
             logger.warning(
                 "Bot không có quyền truy cập phòng %s.",
                 channel_id,
@@ -238,16 +270,21 @@ class VoiceLockBot(commands.Bot):
             return
 
         try:
+
             voice_client = guild.voice_client
 
             if voice_client and voice_client.is_connected():
+
                 if voice_client.channel.id != channel_id:
                     await voice_client.move_to(channel)
+
                     logger.info(
                         "Bot đã quay về phòng %s.",
                         channel_id,
                     )
+
             else:
+
                 await channel.connect(
                     timeout=20,
                     reconnect=True,
@@ -259,38 +296,46 @@ class VoiceLockBot(commands.Bot):
                 )
 
         except discord.Forbidden:
+
             logger.warning(
                 "Discord từ chối quyền kết nối phòng %s.",
                 channel_id,
             )
 
         except discord.HTTPException:
+
             logger.exception(
                 "Lỗi Discord khi kết nối phòng %s.",
                 channel_id,
             )
 
         except asyncio.TimeoutError:
+
             logger.warning(
                 "Hết thời gian chờ kết nối phòng %s.",
                 channel_id,
             )
 
         except Exception:
+
             logger.exception(
                 "Lỗi không xác định khi kết nối phòng %s.",
                 channel_id,
             )
 
-    @tasks.loop(seconds=10)
+    @tasks.loop(seconds=VOICE_MONITOR_INTERVAL)
     async def voice_monitor(self):
-        """
-        Kiểm tra mỗi 10 giây để phát hiện bot bị ngắt
-        kết nối hoặc bị chuyển sang phòng khác.
-        """
 
         for guild_id in list(self.voice_targets.keys()):
-            await self.try_reconnect(guild_id)
+
+            try:
+                await self.try_reconnect(guild_id)
+
+            except Exception:
+                logger.exception(
+                    "Lỗi kiểm tra Voice tại server %s.",
+                    guild_id,
+                )
 
     @voice_monitor.before_loop
     async def before_voice_monitor(self):
@@ -302,7 +347,8 @@ class VoiceLockBot(commands.Bot):
         before,
         after,
     ):
-        # Chỉ theo dõi trạng thái voice của chính bot.
+
+        # Chỉ theo dõi trạng thái Voice của bot
         if self.user is None or member.id != self.user.id:
             return
 
@@ -313,7 +359,6 @@ class VoiceLockBot(commands.Bot):
 
         target_id = self.voice_targets[guild_id]
 
-        # Bot bị chuyển sang phòng khác hoặc bị ngắt kết nối.
         moved_away = (
             after.channel is None
             or after.channel.id != target_id
@@ -334,174 +379,313 @@ bot = VoiceLockBot()
 URL_PATTERN = re.compile(
     r"""(?ix)\b(?:https?://|www\.|discord\.gg/|discord(?:app)?\.com/)[^\s<>]+"""
 )
-DISCORD_ID_PATTERN = re.compile(r"(?<!\d)\d{15,22}(?!\d)")
-CUSTOM_EMOJI_PATTERN = re.compile(r"<a?:[A-Za-z0-9_]+:\d{15,22}>")
-MARKDOWN_LINK_PATTERN = re.compile(
-    r"\[([^\]]*)\]\(\s*https?://[^)]*\)", re.IGNORECASE
+
+DISCORD_ID_PATTERN = re.compile(
+    r"(?<!\d)\d{15,22}(?!\d)"
 )
-USER_MENTION_PATTERN = re.compile(r"<@!?\d{15,22}>")
-ROLE_MENTION_PATTERN = re.compile(r"<@&\d{15,22}>")
-CHANNEL_MENTION_PATTERN = re.compile(r"<#\d{15,22}>")
+
+CUSTOM_EMOJI_PATTERN = re.compile(
+    r"<a?:[A-Za-z0-9_]+:\d{15,22}>"
+)
+
+MARKDOWN_LINK_PATTERN = re.compile(
+    r"\[([^\]]*)\]\(\s*https?://[^)]*\)",
+    re.IGNORECASE,
+)
+
+USER_MENTION_PATTERN = re.compile(
+    r"<@!?\d{15,22}>"
+)
+
+ROLE_MENTION_PATTERN = re.compile(
+    r"<@&\d{15,22}>"
+)
+
+CHANNEL_MENTION_PATTERN = re.compile(
+    r"<#\d{15,22}>"
+)
 
 
-def resolve_mentions(message: discord.Message, text: str) -> str:
+def resolve_mentions(
+    message: discord.Message,
+    text: str,
+) -> str:
+
     if message.guild is None:
         return text
 
     for member in message.mentions:
-        for mention in (f"<@{member.id}>", f"<@!{member.id}>"):
-            text = text.replace(mention, member.display_name)
+
+        for mention in (
+            f"<@{member.id}>",
+            f"<@!{member.id}>",
+        ):
+            text = text.replace(
+                mention,
+                member.display_name,
+            )
 
     text = ROLE_MENTION_PATTERN.sub(" ", text)
     text = CHANNEL_MENTION_PATTERN.sub(" ", text)
+
     return USER_MENTION_PATTERN.sub(" ", text)
 
 
 def clean_message(message: discord.Message) -> str:
+
     text = message.content or ""
+
     if not text.strip():
         return ""
 
     text = resolve_mentions(message, text)
+
     text = MARKDOWN_LINK_PATTERN.sub(" ", text)
     text = URL_PATTERN.sub(" ", text)
     text = CUSTOM_EMOJI_PATTERN.sub(" ", text)
     text = DISCORD_ID_PATTERN.sub(" ", text)
-    text = emoji.replace_emoji(text, replace=" ")
+
+    text = emoji.replace_emoji(
+        text,
+        replace=" ",
+    )
+
     text = USER_MENTION_PATTERN.sub(" ", text)
     text = ROLE_MENTION_PATTERN.sub(" ", text)
     text = CHANNEL_MENTION_PATTERN.sub(" ", text)
-    text = text.replace("\\u200b", " ").replace("\\ufeff", " ")
-    text = re.sub(r"\s+", " ", text).strip()
 
-    if not re.search(r"[^\W_]", text, flags=re.UNICODE):
+    text = (
+        text
+        .replace("\u200b", " ")
+        .replace("\ufeff", " ")
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    ).strip()
+
+    if not re.search(
+        r"[^\W_]",
+        text,
+        flags=re.UNICODE,
+    ):
         return ""
 
     return text[:MAX_TEXT_LENGTH].strip()
 
 
+# ==================================================
+# VOICE CLIENT
+# ==================================================
+
 def get_voice_client(guild: discord.Guild):
+
     voice_client = guild.voice_client
-    if voice_client is None or not voice_client.is_connected():
+
+    if (
+        voice_client is None
+        or not voice_client.is_connected()
+    ):
         return None
+
     return voice_client
 
 
+# ==================================================
+# TẠO FILE TTS
+# ==================================================
+
 async def create_tts_file(text: str) -> str:
-    fd, file_path = tempfile.mkstemp(prefix="discord_tts_", suffix=".mp3")
+
+    fd, file_path = tempfile.mkstemp(
+        prefix="discord_tts_",
+        suffix=".mp3",
+    )
+
     os.close(fd)
+
     try:
+
         communicate = edge_tts.Communicate(
             text=text,
             voice=TTS_VOICE,
             rate=TTS_RATE,
             pitch=TTS_PITCH,
         )
+
         await communicate.save(file_path)
 
-        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-            raise RuntimeError("TTS không tạo được file âm thanh.")
+        if (
+            not os.path.exists(file_path)
+            or os.path.getsize(file_path) == 0
+        ):
+            raise RuntimeError(
+                "TTS không tạo được file âm thanh."
+            )
+
         return file_path
+
     except Exception:
-        try:
-            os.remove(file_path)
-        except OSError:
-            pass
+
+        delete_audio_file(file_path)
         raise
 
 
+# ==================================================
+# XÓA FILE ÂM THANH
+# ==================================================
+
 def delete_audio_file(file_path: str):
+
     if not file_path:
         return
+
     try:
+
         if os.path.exists(file_path):
             os.remove(file_path)
-    except OSError:
-        logger.warning("Không xóa được file âm thanh: %s", file_path)
 
+    except OSError:
+
+        logger.warning(
+            "Không xóa được file âm thanh: %s",
+            file_path,
+        )
+
+
+# ==================================================
+# QUẢN LÝ HÀNG ĐỢI
+# ==================================================
 
 def clear_speech_queue(guild_id: int):
+
     queue = get_queue(guild_id)
+
     while True:
+
         try:
             queue.get_nowait()
             queue.task_done()
+
         except asyncio.QueueEmpty:
             break
 
 
+# ==================================================
+# WORKER TTS
+# ==================================================
+
 async def speech_worker(guild_id: int):
+
     queue = get_queue(guild_id)
 
     while not bot.is_closed():
+
         text = await queue.get()
+
         file_path = None
         source = None
 
         try:
+
             if not is_speech_enabled(guild_id):
                 continue
 
             guild = bot.get_guild(guild_id)
+
             if guild is None:
                 continue
 
             voice_client = get_voice_client(guild)
+
             if voice_client is None:
                 continue
 
             try:
                 file_path = await create_tts_file(text)
+
             except Exception:
-                logger.exception("Không tạo được âm thanh TTS.")
+                logger.exception(
+                    "Không tạo được âm thanh TTS."
+                )
                 continue
 
             if not is_speech_enabled(guild_id):
                 continue
 
             voice_client = get_voice_client(guild)
+
             if voice_client is None:
                 continue
 
             async with get_lock(guild_id):
+
                 if not is_speech_enabled(guild_id):
                     continue
 
                 voice_client = get_voice_client(guild)
+
                 if voice_client is None:
                     continue
 
                 while voice_client.is_playing():
+
                     if not is_speech_enabled(guild_id):
                         break
+
                     await asyncio.sleep(0.2)
 
-                if not is_speech_enabled(guild_id) or not voice_client.is_connected():
+                if (
+                    not is_speech_enabled(guild_id)
+                    or not voice_client.is_connected()
+                ):
                     continue
 
-                source = discord.FFmpegPCMAudio(file_path, options="-vn")
+                source = discord.FFmpegPCMAudio(
+                    file_path,
+                    options="-vn",
+                )
+
                 active_audio_files[guild_id] = file_path
 
                 try:
+
                     voice_client.play(source)
+
                     while voice_client.is_playing():
+
                         if not is_speech_enabled(guild_id):
                             voice_client.stop()
                             break
+
                         if not voice_client.is_connected():
                             break
+
                         await asyncio.sleep(0.2)
+
                 except Exception:
-                    logger.exception("Lỗi phát âm thanh TTS.")
+                    logger.exception(
+                        "Lỗi phát âm thanh TTS."
+                    )
 
         except asyncio.CancelledError:
             raise
+
         except Exception:
-            logger.exception("Lỗi worker TTS của server %s", guild_id)
+            logger.exception(
+                "Lỗi worker TTS của server %s",
+                guild_id,
+            )
+
         finally:
+
             if source is not None:
+
                 try:
                     source.cleanup()
+
                 except Exception:
                     pass
 
@@ -509,28 +693,38 @@ async def speech_worker(guild_id: int):
                 delete_audio_file(file_path)
 
             if active_audio_files.get(guild_id) == file_path:
-                active_audio_files.pop(guild_id, None)
+                active_audio_files.pop(
+                    guild_id,
+                    None,
+                )
 
             queue.task_done()
 
 
 def ensure_worker(guild_id: int):
+
     task = speech_workers.get(guild_id)
+
     if task is None or task.done():
-        speech_workers[guild_id] = asyncio.create_task(speech_worker(guild_id))
+
+        speech_workers[guild_id] = asyncio.create_task(
+            speech_worker(guild_id)
+        )
 
 
 # ==================================================
-# KIỂM TRA QUYỀN
+# KIỂM TRA OWNER
 # ==================================================
 
 def owner_only():
+
     async def predicate(
         interaction: discord.Interaction,
     ):
+
         if interaction.user.id != OWNER_ID:
             raise app_commands.CheckFailure(
-                "Bạn không có quyền sử dụng lệnh này."
+                "❌ Chỉ Owner bot mới được sử dụng lệnh này!"
             )
 
         return True
@@ -539,7 +733,7 @@ def owner_only():
 
 
 # ==================================================
-# /join — KHÓA VỊ TRÍ PHÒNG THOẠI
+# /join — KHÓA PHÒNG VOICE
 # ==================================================
 
 @bot.tree.command(
@@ -547,9 +741,12 @@ def owner_only():
     description="Khóa vị trí phòng thoại của bot.",
 )
 @owner_only()
-async def join(interaction: discord.Interaction):
+async def join(
+    interaction: discord.Interaction,
+):
 
     if interaction.guild is None:
+
         await interaction.response.send_message(
             "Lệnh này chỉ dùng được trong server.",
             ephemeral=True,
@@ -561,6 +758,7 @@ async def join(interaction: discord.Interaction):
     )
 
     if member is None or member.voice is None:
+
         await interaction.response.send_message(
             "Bạn cần vào phòng thoại trước khi dùng /join.",
             ephemeral=True,
@@ -571,8 +769,12 @@ async def join(interaction: discord.Interaction):
 
     if not isinstance(
         channel,
-        (discord.VoiceChannel, discord.StageChannel),
+        (
+            discord.VoiceChannel,
+            discord.StageChannel,
+        ),
     ):
+
         await interaction.response.send_message(
             "Không thể khóa vị trí ở phòng này.",
             ephemeral=True,
@@ -582,6 +784,7 @@ async def join(interaction: discord.Interaction):
     bot_member = interaction.guild.me
 
     if bot_member is None:
+
         await interaction.response.send_message(
             "Không thể lấy thông tin bot trong server.",
             ephemeral=True,
@@ -590,7 +793,11 @@ async def join(interaction: discord.Interaction):
 
     permissions = channel.permissions_for(bot_member)
 
-    if not permissions.view_channel or not permissions.connect:
+    if (
+        not permissions.view_channel
+        or not permissions.connect
+    ):
+
         await interaction.response.send_message(
             "Bot không có quyền vào phòng thoại này.",
             ephemeral=True,
@@ -599,7 +806,6 @@ async def join(interaction: discord.Interaction):
 
     await interaction.response.defer(ephemeral=True)
 
-    # Lưu trạng thái khóa vào RAM và SQLite.
     bot.voice_targets[interaction.guild.id] = channel.id
 
     save_lock(
@@ -608,12 +814,16 @@ async def join(interaction: discord.Interaction):
     )
 
     try:
+
         voice_client = interaction.guild.voice_client
 
         if voice_client and voice_client.is_connected():
+
             if voice_client.channel.id != channel.id:
                 await voice_client.move_to(channel)
+
         else:
+
             await channel.connect(
                 timeout=20,
                 reconnect=True,
@@ -627,7 +837,10 @@ async def join(interaction: discord.Interaction):
         )
 
     except Exception:
-        logger.exception("Không thể kết nối phòng thoại.")
+
+        logger.exception(
+            "Không thể kết nối phòng thoại."
+        )
 
         await interaction.followup.send(
             "Đã lưu phòng cần khóa, nhưng bot chưa kết nối được. "
@@ -637,7 +850,7 @@ async def join(interaction: discord.Interaction):
 
 
 # ==================================================
-# /leave — TẮT KHÓA VỊ TRÍ
+# /leave — TẮT KHÓA PHÒNG
 # ==================================================
 
 @bot.tree.command(
@@ -645,9 +858,12 @@ async def join(interaction: discord.Interaction):
     description="Tắt khóa vị trí và cho bot rời phòng thoại.",
 )
 @owner_only()
-async def leave(interaction: discord.Interaction):
+async def leave(
+    interaction: discord.Interaction,
+):
 
     if interaction.guild is None:
+
         await interaction.response.send_message(
             "Lệnh này chỉ dùng được trong server.",
             ephemeral=True,
@@ -656,12 +872,10 @@ async def leave(interaction: discord.Interaction):
 
     guild_id = interaction.guild.id
 
-    # Tắt TTS và xóa tin nhắn đang chờ đọc.
     speech_enabled[guild_id] = False
     clear_speech_queue(guild_id)
 
-    # Xóa khóa trước khi ngắt kết nối để bot
-    # không tự kết nối lại sau khi rời phòng.
+    # Xóa khóa trước khi ngắt kết nối
     bot.voice_targets.pop(guild_id, None)
     remove_lock(guild_id)
 
@@ -671,12 +885,14 @@ async def leave(interaction: discord.Interaction):
         voice_client.is_connected()
         or voice_client.is_connecting()
     ):
+
         try:
             await voice_client.disconnect(force=True)
 
         except Exception:
+
             logger.exception(
-                "Lỗi khi ngắt kết nối voice."
+                "Lỗi khi ngắt kết nối Voice."
             )
 
             await interaction.response.send_message(
@@ -692,24 +908,33 @@ async def leave(interaction: discord.Interaction):
 
 
 # ==================================================
-# /on VÀ /off — ĐIỀU KHIỂN TTS
+# /on — BẬT TTS
 # ==================================================
 
 @bot.tree.command(
     name="on",
     description="Bật chế độ đọc tin nhắn thành giọng nói.",
 )
+@owner_only()
 @app_commands.guild_only()
-async def turn_on(interaction: discord.Interaction):
+async def turn_on(
+    interaction: discord.Interaction,
+):
+
     guild = interaction.guild
+
     if guild is None:
+
         await interaction.response.send_message(
-            "Lệnh này chỉ dùng được trong server.", ephemeral=True
+            "Lệnh này chỉ dùng được trong server.",
+            ephemeral=True,
         )
         return
 
     voice_client = get_voice_client(guild)
+
     if voice_client is None:
+
         await interaction.response.send_message(
             "Bot chưa ở trong phòng Voice. Hãy dùng `/join` trước.",
             ephemeral=True,
@@ -717,31 +942,48 @@ async def turn_on(interaction: discord.Interaction):
         return
 
     speech_enabled[guild.id] = True
+
     ensure_worker(guild.id)
+
     await interaction.response.send_message(
-        "Đã bật chế độ đọc tin nhắn! 🔊", ephemeral=True
+        "Đã bật chế độ đọc tin nhắn! 🔊",
+        ephemeral=True,
     )
 
+
+# ==================================================
+# /off — TẮT TTS
+# ==================================================
 
 @bot.tree.command(
     name="off",
     description="Tắt chế độ đọc giọng nói nhưng vẫn ở Voice.",
 )
+@owner_only()
 @app_commands.guild_only()
-async def turn_off(interaction: discord.Interaction):
+async def turn_off(
+    interaction: discord.Interaction,
+):
+
     guild = interaction.guild
+
     if guild is None:
+
         await interaction.response.send_message(
-            "Lệnh này chỉ dùng được trong server.", ephemeral=True
+            "Lệnh này chỉ dùng được trong server.",
+            ephemeral=True,
         )
         return
 
     speech_enabled[guild.id] = False
+
     clear_speech_queue(guild.id)
 
     voice_client = get_voice_client(guild)
+
     if voice_client is not None and (
-        voice_client.is_playing() or voice_client.is_paused()
+        voice_client.is_playing()
+        or voice_client.is_paused()
     ):
         voice_client.stop()
 
@@ -752,11 +994,14 @@ async def turn_off(interaction: discord.Interaction):
 
 
 # ==================================================
-# ĐỌC TIN NHẮN TRONG CHAT CỦA PHÒNG VOICE
+# ĐỌC TIN NHẮN
 # ==================================================
 
 @bot.event
-async def on_message(message: discord.Message):
+async def on_message(
+    message: discord.Message,
+):
+
     if message.author.bot or message.guild is None:
         return
 
@@ -767,23 +1012,31 @@ async def on_message(message: discord.Message):
         return
 
     voice_client = get_voice_client(guild)
+
     if voice_client is None:
         return
 
-    # Chỉ đọc chat của phòng Voice mà bot đang kết nối.
+    # Giữ nguyên logic gốc:
+    # kênh chat có ID trùng với phòng Voice
     if message.channel.id != voice_client.channel.id:
         return
 
     text = clean_message(message)
+
     if not text:
         return
 
     queue = get_queue(guild_id)
-    if queue.qsize() >= 30:
-        logger.info("Bỏ qua tin nhắn vì hàng đợi TTS đã đầy.")
+
+    if queue.qsize() >= MAX_QUEUE_SIZE:
+
+        logger.info(
+            "Bỏ qua tin nhắn vì hàng đợi TTS đã đầy."
+        )
         return
 
     await queue.put(text)
+
     ensure_worker(guild_id)
 
 
@@ -805,6 +1058,7 @@ async def sen(
 ):
 
     if interaction.guild is None:
+
         await interaction.response.send_message(
             "Lệnh này chỉ dùng được trong server.",
             ephemeral=True,
@@ -815,6 +1069,7 @@ async def sen(
         interaction.channel,
         "send",
     ):
+
         await interaction.response.send_message(
             "Không thể gửi tin nhắn ở kênh này.",
             ephemeral=True,
@@ -822,6 +1077,7 @@ async def sen(
         return
 
     if len(noi_dung) > 2000:
+
         await interaction.response.send_message(
             "Nội dung vượt quá giới hạn 2000 ký tự của Discord.",
             ephemeral=True,
@@ -829,6 +1085,7 @@ async def sen(
         return
 
     try:
+
         await interaction.channel.send(
             noi_dung,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -840,13 +1097,17 @@ async def sen(
         )
 
     except discord.Forbidden:
+
         await interaction.response.send_message(
             "Bot không có quyền gửi tin nhắn ở kênh này.",
             ephemeral=True,
         )
 
     except discord.HTTPException:
-        logger.exception("Không thể gửi tin nhắn.")
+
+        logger.exception(
+            "Không thể gửi tin nhắn."
+        )
 
         await interaction.response.send_message(
             "Discord gặp lỗi khi gửi tin nhắn.",
@@ -865,27 +1126,44 @@ async def on_app_command_error(
 ):
 
     if isinstance(error, app_commands.CheckFailure):
-        message = "Bạn không có quyền sử dụng lệnh này."
-    else:
-        logger.exception(
-            "Lỗi slash command: %s",
-            error,
+
+        message = (
+            "❌ Chỉ Owner bot mới được sử dụng lệnh này!"
+            if interaction.user.id != OWNER_ID
+            else "Lệnh này không thể thực hiện trong ngữ cảnh hiện tại."
         )
+
+    else:
+
+        logger.error(
+            "Lỗi slash command:",
+            exc_info=(
+                type(error),
+                error,
+                error.__traceback__,
+            ),
+        )
+
         message = "Lệnh gặp lỗi khi thực thi."
 
     try:
+
         if interaction.response.is_done():
+
             await interaction.followup.send(
                 message,
                 ephemeral=True,
             )
+
         else:
+
             await interaction.response.send_message(
                 message,
                 ephemeral=True,
             )
 
     except discord.HTTPException:
+
         logger.exception(
             "Không thể gửi thông báo lỗi."
         )
@@ -896,8 +1174,10 @@ async def on_app_command_error(
 # ==================================================
 
 if not TOKEN:
+
     raise RuntimeError(
         "Thiếu biến môi trường DISCORD_TOKEN."
     )
+
 
 bot.run(TOKEN)
