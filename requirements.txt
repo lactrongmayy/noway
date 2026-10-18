@@ -1,3 +1,4 @@
-discord.py[voice]>=2.5.0
-edge-tts>=7.0.0
-emoji>=2.14.0
+discord.py[voice]
+edge-tts
+emoji
+PyNaCl
