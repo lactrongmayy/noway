@@ -10,8 +10,8 @@ from discord.ext import commands
 # =====================================================
 TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = 1356498767788118099
-# Số tin nhắn xử lý trước khi nhường quyền chạy cho tác vụ khác
-BATCH_SIZE = 500
+# Cập nhật tiến độ sau mỗi số kênh này
+PROGRESS_EVERY = 5
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
@@ -24,101 +24,115 @@ bot = commands.Bot(
     command_prefix="!",
     intents=intents
 )
+# Chỉ cho phép một lượt quét chạy tại một thời điểm
+scan_lock = asyncio.Lock()
 # =====================================================
 # KIỂM TRA OWNER
 # =====================================================
 def is_owner(interaction: discord.Interaction) -> bool:
     return interaction.user.id == OWNER_ID
 # =====================================================
-# CHỌN CÁC KÊNH CÓ THỂ QUÉT
+# LẤY CÁC KÊNH BOT CÓ QUYỀN ĐỌC
 # =====================================================
 def get_readable_channels(guild: discord.Guild):
+    me = guild.me
+    if me is None:
+        return []
     channels = []
     for channel in guild.text_channels:
-        permissions = channel.permissions_for(guild.me)
-        if permissions.view_channel and permissions.read_message_history:
+        permissions = channel.permissions_for(me)
+        if (
+            permissions.view_channel
+            and permissions.read_message_history
+        ):
             channels.append(channel)
     return channels
 # =====================================================
-# QUÉT LỊCH SỬ MỘT KÊNH
-# =====================================================
-async def scan_channel(
-    channel: discord.TextChannel,
-    counter: Counter,
-    target_user_id: int = None
-):
-    total = 0
-    try:
-        async for message in channel.history(
-            limit=None,
-            oldest_first=False
-        ):
-            # Chỉ tính tin nhắn người dùng, không tính bot/webhook
-            if message.author.bot or message.webhook_id is not None:
-                continue
-            if target_user_id is not None:
-                if message.author.id != target_user_id:
-                    continue
-            counter[message.author.id] += 1
-            total += 1
-            # Nhường quyền chạy định kỳ để tránh chặn event loop
-            if total % BATCH_SIZE == 0:
-                await asyncio.sleep(0)
-    except discord.Forbidden:
-        logging.warning(
-            "Không có quyền đọc lịch sử kênh: %s",
-            channel.name
-        )
-    except discord.HTTPException as exc:
-        logging.warning(
-            "Lỗi khi quét kênh %s: %s",
-            channel.name,
-            exc
-        )
-    return total
-# =====================================================
-# QUÉT NHIỀU KÊNH
+# QUÉT LỊCH SỬ TIN NHẮN
 # =====================================================
 async def scan_channels(
     channels,
-    target_user_id: int = None,
+    target_user_id=None,
     progress_message=None
 ):
+    """
+    Quét mỗi kênh một lần.
+    target_user_id=None:
+        Đếm tin nhắn của tất cả người dùng.
+    target_user_id=<ID>:
+        Chỉ đếm tin nhắn của người được chọn,
+        đồng thời vẫn đếm tổng số tin nhắn từng người
+        để tính thứ hạng chính xác.
+    """
     counter = Counter()
     scanned_channels = 0
     total_channels = len(channels)
+    failed_channels = []
     for channel in channels:
-        await scan_channel(
-            channel,
-            counter,
-            target_user_id
-        )
+        try:
+            async for message in channel.history(
+                limit=None,
+                oldest_first=False
+            ):
+                # Bỏ qua bot và webhook
+                if message.author.bot:
+                    continue
+                if message.webhook_id is not None:
+                    continue
+                # Một lượt quét thống kê tất cả người dùng.
+                # Điều này cho phép tính thứ hạng mà không
+                # cần gọi API đọc lịch sử thêm lần nữa.
+                counter[message.author.id] += 1
+        except discord.Forbidden:
+            failed_channels.append(channel.name)
+            logging.warning(
+                "Không có quyền đọc lịch sử kênh: %s",
+                channel.name
+            )
+        except discord.HTTPException as exc:
+            failed_channels.append(channel.name)
+            logging.warning(
+                "Lỗi khi quét kênh %s: %s",
+                channel.name,
+                exc
+            )
+        except asyncio.CancelledError:
+            raise
         scanned_channels += 1
-        if progress_message is not None:
+        # Chỉ cập nhật tiến độ mỗi vài kênh
+        should_update = (
+            scanned_channels % PROGRESS_EVERY == 0
+            or scanned_channels == total_channels
+        )
+        if progress_message is not None and should_update:
             try:
                 await progress_message.edit(
                     content=(
-                        f"🔎 Đang quét lịch sử tin nhắn...\n"
-                        f"📚 Tiến độ: {scanned_channels}/{total_channels} kênh"
+                        "🔎 Đang quét lịch sử tin nhắn...\n"
+                        f"📚 Tiến độ: "
+                        f"{scanned_channels}/{total_channels} kênh"
                     )
                 )
             except discord.HTTPException:
                 pass
-    return counter, scanned_channels
+        # Nhường quyền chạy cho tác vụ khác
+        await asyncio.sleep(0)
+    return counter, scanned_channels, failed_channels
 # =====================================================
 # TẠO EMBED TOP 10
 # =====================================================
 def make_top_embed(
-    guild: discord.Guild,
-    counter: Counter,
-    scope_name: str,
-    scanned_channels: int
+    guild,
+    counter,
+    scope_name,
+    scanned_channels,
+    failed_channels
 ):
     embed = discord.Embed(
         title="🏆 TOP 10 NGƯỜI NHẮN TIN NHIỀU NHẤT",
         description=(
             f"📍 Phạm vi: **{scope_name}**\n"
-            f"🗂️ Số kênh đã quét: **{scanned_channels}**"
+            f"🗂️ Số kênh đã xử lý: **{scanned_channels}**"
         ),
         color=discord.Color.blurple()
     )
@@ -129,26 +143,44 @@ def make_top_embed(
             value="Không tìm thấy tin nhắn phù hợp.",
             inline=False
         )
-        return embed
-    lines = []
-    medals = ["🥇", "🥈", "🥉"]
-    for index, (user_id, count) in enumerate(ranking):
-        member = guild.get_member(user_id)
-        if member is not None:
-            username = member.display_name
-        else:
-            user = bot.get_user(user_id)
-            username = user.name if user else f"User {user_id}"
-        medal = medals[index] if index < 3 else f"**{index + 1}.**"
-        lines.append(
-            f"{medal} **{discord.utils.escape_markdown(username)}**"
-            f" — **{count:,}** tin nhắn"
+    else:
+        lines = []
+        medals = ["🥇", "🥈", "🥉"]
+        for index, (user_id, count) in enumerate(ranking):
+            member = guild.get_member(user_id)
+            if member:
+                username = member.display_name
+            else:
+                user = bot.get_user(user_id)
+                username = (
+                    user.name if user
+                    else f"User {user_id}"
+                )
+            prefix = (
+                medals[index]
+                if index < 3
+                else f"**{index + 1}.**"
+            )
+            lines.append(
+                f"{prefix} "
+                f"**{discord.utils.escape_markdown(username)}**"
+                f" — **{count:,}** tin nhắn"
+            )
+        embed.add_field(
+            name="Bảng xếp hạng",
+            value="\n".join(lines),
+            inline=False
         )
-    embed.add_field(
-        name="Bảng xếp hạng",
-        value="\n".join(lines),
-        inline=False
-    )
+    if failed_channels:
+        embed.add_field(
+            name="⚠️ Kênh chưa quét được",
+            value=(
+                f"**{len(failed_channels)}** kênh gặp lỗi "
+                "quyền truy cập hoặc API. "
+                "Số liệu có thể chưa đầy đủ."
+            ),
+            inline=False
+        )
     embed.set_footer(
         text="Chỉ tính tin nhắn người dùng còn trong lịch sử."
     )
@@ -173,20 +205,28 @@ async def quet(
             ephemeral=True
         )
         return
-    if interaction.guild is None:
+    guild = interaction.guild
+    if guild is None:
         await interaction.response.send_message(
             "❌ Lệnh này chỉ dùng được trong server.",
             ephemeral=True
         )
         return
-    await interaction.response.defer(ephemeral=False, thinking=True)
+    if scan_lock.locked():
+        await interaction.response.send_message(
+            "⏳ Một lượt quét đang chạy. "
+            "Vui lòng đợi lượt đó hoàn thành.",
+            ephemeral=True
+        )
+        return
     if kenh is not None:
-        permissions = kenh.permissions_for(interaction.guild.me)
+        me = guild.me
+        permissions = kenh.permissions_for(me)
         if not (
             permissions.view_channel
             and permissions.read_message_history
         ):
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "❌ Bot không có quyền đọc lịch sử kênh này.",
                 ephemeral=True
             )
@@ -194,37 +234,51 @@ async def quet(
         channels = [kenh]
         scope_name = f"#{kenh.name}"
     else:
-        channels = get_readable_channels(interaction.guild)
+        channels = get_readable_channels(guild)
         scope_name = "Toàn server"
     if not channels:
-        await interaction.followup.send(
+        await interaction.response.send_message(
             "❌ Không tìm thấy kênh nào có thể quét.",
             ephemeral=True
         )
         return
-    progress = await interaction.followup.send(
-        "🔎 Đang bắt đầu quét lịch sử tin nhắn...",
-        wait=True
+    await interaction.response.defer(
+        ephemeral=False,
+        thinking=True
     )
-    counter, scanned_channels = await scan_channels(
-        channels,
-        progress_message=progress
-    )
-    embed = make_top_embed(
-        interaction.guild,
-        counter,
-        scope_name,
-        scanned_channels
-    )
-    await progress.edit(
-        content="✅ Đã hoàn tất quét lịch sử tin nhắn!",
-        embed=embed
-    )
+    async with scan_lock:
+        progress = await interaction.followup.send(
+            "🔎 Đang bắt đầu quét lịch sử tin nhắn...",
+            wait=True
+        )
+        try:
+            counter, scanned, failed = await scan_channels(
+                channels,
+                progress_message=progress
+            )
+            embed = make_top_embed(
+                guild,
+                counter,
+                scope_name,
+                scanned,
+                failed
+            )
+            await progress.edit(
+                content="✅ Đã hoàn tất quét lịch sử tin nhắn!",
+                embed=embed
+            )
+        except Exception:
+            logging.exception("Lỗi khi chạy lệnh /quet")
+            await progress.edit(
+                content=(
+                    "❌ Có lỗi khi quét lịch sử. "
+                    "Hãy kiểm tra log Railway."
+                ),
+                embed=None
+            )
 # =====================================================
 # LỆNH /SOTN
 # =====================================================
-class ScopeChoice(str):
-    pass
 @bot.tree.command(
     name="sotn",
     description="Kiểm tra số tin nhắn của một người"
@@ -236,8 +290,14 @@ class ScopeChoice(str):
 )
 @app_commands.choices(
     pham_vi=[
-        app_commands.Choice(name="all - Toàn server", value="all"),
-        app_commands.Choice(name="kenh - Một kênh", value="kenh")
+        app_commands.Choice(
+            name="all - Toàn server",
+            value="all"
+        ),
+        app_commands.Choice(
+            name="kenh - Một kênh",
+            value="kenh"
+        )
     ]
 )
 async def sotn(
@@ -252,7 +312,8 @@ async def sotn(
             ephemeral=True
         )
         return
-    if interaction.guild is None:
+    guild = interaction.guild
+    if guild is None:
         await interaction.response.send_message(
             "❌ Lệnh này chỉ dùng được trong server.",
             ephemeral=True
@@ -264,6 +325,13 @@ async def sotn(
             ephemeral=True
         )
         return
+    if scan_lock.locked():
+        await interaction.response.send_message(
+            "⏳ Một lượt quét đang chạy. "
+            "Vui lòng đợi lượt đó hoàn thành.",
+            ephemeral=True
+        )
+        return
     if pham_vi.value == "kenh":
         if kenh is None:
             await interaction.response.send_message(
@@ -271,7 +339,7 @@ async def sotn(
                 ephemeral=True
             )
             return
-        permissions = kenh.permissions_for(interaction.guild.me)
+        permissions = kenh.permissions_for(guild.me)
         if not (
             permissions.view_channel
             and permissions.read_message_history
@@ -284,7 +352,7 @@ async def sotn(
         channels = [kenh]
         scope_name = f"#{kenh.name}"
     else:
-        channels = get_readable_channels(interaction.guild)
+        channels = get_readable_channels(guild)
         scope_name = "Toàn server"
     if not channels:
         await interaction.response.send_message(
@@ -292,97 +360,108 @@ async def sotn(
             ephemeral=True
         )
         return
-    await interaction.response.defer(ephemeral=False, thinking=True)
-    progress = await interaction.followup.send(
-        f"🔎 Đang kiểm tra tin nhắn của {ten.display_name}...",
-        wait=True
+    await interaction.response.defer(
+        ephemeral=False,
+        thinking=True
     )
-    counter, scanned_channels = await scan_channels(
-        channels,
-        target_user_id=ten.id,
-        progress_message=progress
-    )
-    message_count = counter.get(ten.id, 0)
-    # Tính thứ hạng của người đó trong phạm vi đã quét
-    # Chỉ lấy các tin nhắn đã thống kê được trong phạm vi này.
-    if pham_vi.value == "all":
-        ranking_counter, _ = await scan_channels(
-            channels,
-            progress_message=None
+    async with scan_lock:
+        progress = await interaction.followup.send(
+            f"🔎 Đang thống kê tin nhắn của {ten.display_name}...",
+            wait=True
         )
-    else:
-        ranking_counter = Counter()
         try:
-            async for message in kenh.history(
-                limit=None,
-                oldest_first=False
-            ):
-                if message.author.bot or message.webhook_id is not None:
-                    continue
-                ranking_counter[message.author.id] += 1
-                if sum(ranking_counter.values()) % BATCH_SIZE == 0:
-                    await asyncio.sleep(0)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-    sorted_users = ranking_counter.most_common()
-    rank = next(
-        (
-            index
-            for index, (user_id, _) in enumerate(sorted_users, start=1)
-            if user_id == ten.id
-        ),
-        None
-    )
-    embed = discord.Embed(
-        title="📊 THỐNG KÊ TIN NHẮN",
-        color=discord.Color.green()
-    )
-    embed.add_field(
-        name="👤 Người dùng",
-        value=ten.mention,
-        inline=False
-    )
-    embed.add_field(
-        name="💬 Tổng số tin nhắn",
-        value=f"**{message_count:,}**",
-        inline=True
-    )
-    embed.add_field(
-        name="🏆 Xếp hạng",
-        value=f"**#{rank}**" if rank else "Chưa xếp hạng",
-        inline=True
-    )
-    embed.add_field(
-        name="📍 Phạm vi",
-        value=scope_name,
-        inline=True
-    )
-    embed.add_field(
-        name="🗂️ Số kênh đã quét",
-        value=str(scanned_channels),
-        inline=True
-    )
-    embed.set_footer(
-        text="Thống kê lịch sử tin nhắn mà bot có thể truy cập."
-    )
-    await progress.edit(
-        content="✅ Đã hoàn tất thống kê!",
-        embed=embed
-    )
+            # Chỉ quét một lượt. Counter chứa số tin nhắn
+            # của tất cả thành viên để tính cả số lượng
+            # và thứ hạng của người được chọn.
+            counter, scanned, failed = await scan_channels(
+                channels,
+                progress_message=progress
+            )
+            message_count = counter.get(ten.id, 0)
+            ranking = counter.most_common()
+            rank = next(
+                (
+                    index
+                    for index, (user_id, _) in enumerate(
+                        ranking,
+                        start=1
+                    )
+                    if user_id == ten.id
+                ),
+                None
+            )
+            embed = discord.Embed(
+                title="📊 THỐNG KÊ TIN NHẮN",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="👤 Người dùng",
+                value=ten.mention,
+                inline=False
+            )
+            embed.add_field(
+                name="💬 Tổng số tin nhắn",
+                value=f"**{message_count:,}**",
+                inline=True
+            )
+            embed.add_field(
+                name="🏆 Xếp hạng",
+                value=f"**#{rank}**" if rank else "Chưa xếp hạng",
+                inline=True
+            )
+            embed.add_field(
+                name="📍 Phạm vi",
+                value=scope_name,
+                inline=True
+            )
+            embed.add_field(
+                name="🗂️ Số kênh đã xử lý",
+                value=str(scanned),
+                inline=True
+            )
+            if failed:
+                embed.add_field(
+                    name="⚠️ Kênh chưa quét được",
+                    value=(
+                        f"{len(failed)} kênh gặp lỗi. "
+                        "Kết quả có thể chưa đầy đủ."
+                    ),
+                    inline=False
+                )
+            embed.set_footer(
+                text="Thống kê lịch sử tin nhắn mà bot có thể truy cập."
+            )
+            await progress.edit(
+                content="✅ Đã hoàn tất thống kê!",
+                embed=embed
+            )
+        except Exception:
+            logging.exception("Lỗi khi chạy lệnh /sotn")
+            await progress.edit(
+                content=(
+                    "❌ Có lỗi khi thống kê tin nhắn. "
+                    "Hãy kiểm tra log Railway."
+                ),
+                embed=None
+            )
 # =====================================================
 # ĐỒNG BỘ SLASH COMMAND
 # =====================================================
 @bot.event
 async def on_ready():
     logging.info("Bot đã đăng nhập: %s", bot.user)
-    try:
-        synced = await bot.tree.sync()
-        logging.info(
-            "Đã đồng bộ %s slash command.",
-            len(synced)
-        )
-    except Exception:
-        logging.exception("Không thể đồng bộ slash command.")
+    if not getattr(bot, "commands_synced", False):
+        try:
+            synced = await bot.tree.sync()
+            logging.info(
+                "Đã đồng bộ %s slash command.",
+                len(synced)
+            )
+            bot.commands_synced = True
+        except Exception:
+            logging.exception(
+                "Không thể đồng bộ slash command."
+            )
 # =====================================================
 # KHỞI ĐỘNG
 # =====================================================
