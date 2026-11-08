@@ -15,7 +15,7 @@ import emoji
 
 # ==================== CẤU HÌNH ====================
 TOKEN = "YOUR_BOT_TOKEN_HERE"  # Thay bằng token của bạn
-PREFIX = "!"
+PREFIX = "none"
 TTS_VOICE = "vi-VN-HoaiMyNeural"
 TTS_RATE = "+0%"
 TTS_PITCH = "+0Hz"
