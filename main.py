@@ -14,7 +14,9 @@ import edge_tts
 import emoji
 
 # ==================== CẤU HÌNH ====================
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # Thay bằng token của bạn
+TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN")
+if not TOKEN:
+    raise RuntimeError("Thiếu biến môi trường DISCORD_TOKEN hoặc TOKEN")
 PREFIX = "none"
 TTS_VOICE = "vi-VN-HoaiMyNeural"
 TTS_RATE = "+0%"
